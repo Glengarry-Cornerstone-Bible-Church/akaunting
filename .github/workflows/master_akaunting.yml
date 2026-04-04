@@ -1,0 +1,97 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+
+name: Build and deploy PHP app to Azure Web App - akaunting
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install production composer dependencies
+        run: composer prod
+        env:
+          APP_KEY: ${{ secrets.APP_KEY }}
+
+      - name: Install npm dependencies and build assets
+        run: |
+          npm ci
+          npm run production
+
+      - name: Zip artifact for deployment
+        run: zip -r release.zip . -x '.git/*' 'node_modules/*' 'tests/*' '.github/*' '*.zip'
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v6
+        with:
+          name: php-app
+          path: release.zip
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v6
+        with:
+          name: php-app
+
+      - name: Unzip artifact for deployment
+        run: unzip release.zip -d release
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_06E60B09A86E426E9794B766FCBA667C }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_9A19625695AB4FBF959EE31153E70CB5 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_DD816E264BD7429195D0470F64E6819B }}
+
+      - name: "Deploy to Azure Web App"
+        uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
+        with:
+          app-name: "akaunting"
+          slot-name: "Production"
+          package: release
+
+      - name: Configure startup command
+        run: az webapp config set --name akaunting --resource-group akaunting --startup-file "cp /home/site/wwwroot/default /etc/nginx/sites-enabled/default && service nginx restart" > /dev/null
+
+      - name: Configure app settings
+        run: |
+          az webapp config appsettings set \
+            --name akaunting \
+            --resource-group akaunting \
+            --settings \
+              APP_KEY="${{ secrets.APP_KEY }}" \
+              APP_URL="${{ vars.APP_URL }}" \
+              DB_HOST="${{ vars.DB_HOST }}" \
+              DB_DATABASE="${{ vars.DB_DATABASE }}" \
+              DB_USERNAME="${{ vars.DB_USERNAME }}" \
+              DB_PASSWORD="${{ secrets.DB_PASSWORD }}" \
+            > /dev/null
